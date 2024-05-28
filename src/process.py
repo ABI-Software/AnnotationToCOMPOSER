@@ -1,5 +1,6 @@
 import requests
 import csv
+import urllib.parse
 
 download_url = "https://mapcore-demo.org/devel/flatmap/v4/annotator/download/"
 #Either a list of id or None
@@ -7,9 +8,25 @@ annotationId = None
 process_number = 20
 r = requests.get(download_url)
 rawData = r.json()
+taxonMapping = {}
 
 
 exportFile = "test.csv"
+
+def getTaxon(entry):
+  resource = get_keys_value(entry, "resource")
+  if not resource in taxonMapping:
+    try:
+      r = requests.get(urllib.parse.unquote(resource))
+      data = r.json()
+      if "taxon" in data:
+        taxonMapping[resource] = data["taxon"]
+        return taxonMapping[resource]
+    except:
+      return None
+  if resource in taxonMapping:
+    return taxonMapping[resource]
+  return None
 
 def findAnnotationIdForFeatureId(featureId):
   ids = []
@@ -18,9 +35,8 @@ def findAnnotationIdForFeatureId(featureId):
     itemID = get_keys_value(entry, 'item', 'id')
     if itemID and str(itemID) == targetID:
       if entry['annotationId']:
-        ids.append(str(entry['annotationId']))
+        ids.append(download_url + str(entry['annotationId']))
   return ids
-
 
 def keysExists(element, *keys):
     '''
@@ -92,10 +108,22 @@ def processNewConnections(entry, processed):
     if sourceModels:
       processed['structure_1'] = sourceModels
       targetModels = getModelsForNewFeature(entry, 'target')
+      sentence = "This new connection starts from: " + sourceModels
+      addToSentence(processed, sentence)
       if targetModels:
         processed['structure_2'] = targetModels
+        sentence = "This new connection end at: " + targetModels
+        addToSentence(processed, sentence)
 
-
+def addToSentence(processed, sentence):
+  new_sentence = sentence
+  if not new_sentence.endswith("."):
+    new_sentence += "."
+  current = get_keys_value(processed, "sentence")
+  if current:
+    processed["sentence"] = current + " " + new_sentence
+  else:
+    processed["sentence"] = new_sentence
 
 def processNewStructure(entry, processed):
   processNewConnections(entry, processed)
@@ -109,15 +137,18 @@ def processEntry(entry):
 
   comment = getComment(entry)
   if comment:
-    processed['sentence'] = comment
+    addToSentence(processed, comment)
 
   orcid = getOrcidId(entry)
   if orcid:
     processed['orcid'] = orcid
+    addToSentence(processed, "This is annotated using orcid id:" + orcid)
 
   annotationId = getAnnotationId(entry)
   if annotationId:
-    processed['annotation_id'] = annotationId
+    url = download_url + str(annotationId)
+    processed['annotation_id'] = url
+    addToSentence(processed, "This annotation can be viewed in " + url)
 
   urls = getCurationURLs(entry)
   if urls:
@@ -126,8 +157,15 @@ def processEntry(entry):
   models = getItemModels(entry)
   if models:
     processed['structure_1'] = models
+    addToSentence(processed, "This is annotated on " + models)
   else:
     processNewStructure(entry, processed)
+    addToSentence(processed, "This is an user drawn feature.")
+
+  taxon = getTaxon(entry)
+  if taxon:
+    processed['taxon'] = taxon
+    addToSentence(processed, "This annotation was created on " + taxon)
 
   return processed
 
