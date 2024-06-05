@@ -1,16 +1,17 @@
 import requests
 import csv
 import urllib.parse
+from config import Config
 
 download_url = "https://mapcore-demo.org/devel/flatmap/v4/annotator/download/"
 #Either a list of id or None
 annotationId = None
 process_number = 20
-r = requests.get(download_url)
+headers = {"Authorization": f"Bearer {Config.ANNOTATION_SECRET}"}
+r = requests.get(download_url, headers=headers)
 rawData = r.json()
 taxonMapping = {}
-
-
+batch_name = "test_1"
 exportFile = "test.csv"
 
 def getTaxon(entry):
@@ -76,6 +77,26 @@ def getCurationIDs(entry):
     return ids
   return None
 
+def parseIDs(entry, matchString):
+  curationIds = getCurationURLs(entry)
+  if curationIds:
+    for _id in curationIds:
+      if _id.find(matchString) > -1:
+        return _id.replace(matchString, '')
+  return None
+
+
+def getDOIs(entry):
+  return parseIDs(entry, 'https://doi.org/')
+
+def getPMIDs(entry):
+  pmid = parseIDs(entry, 'https://pubmed.ncbi.nlm.nih.gov/')
+  if pmid and pmid.isdigit():
+    return pmid
+  return None  
+
+
+  
 def getOrcidId(entry):
   return get_keys_value(entry, "creator", "orcid")
 
@@ -128,16 +149,28 @@ def addToSentence(processed, sentence):
 def processNewStructure(entry, processed):
   processNewConnections(entry, processed)
 
-def processEntry(entry):
+def processEntry(entry, entry_id):
   processed = {}
 
-  curationIds = getCurationIDs(entry)
-  if curationIds:
-    processed['pmid'] = curationIds
+  processed['id'] = entry_id
+
+  pmids = getPMIDs(entry)
+  if pmids:
+    processed['pmid'] = pmids
+
+  dois = getDOIs(entry)
+  if dois:
+    processed['doi'] = dois
 
   comment = getComment(entry)
   if comment:
     addToSentence(processed, comment)
+
+  processed['batch_name'] = batch_name
+
+  processed['sentence_id'] = entry_id
+
+  processed['out_of_scope'] = "no"
 
   orcid = getOrcidId(entry)
   if orcid:
@@ -152,7 +185,7 @@ def processEntry(entry):
 
   urls = getCurationURLs(entry)
   if urls:
-    processed['pubmed_url'] = ";".join(urls)
+    processed['url'] = ";".join(urls)
 
   models = getItemModels(entry)
   if models:
@@ -170,16 +203,18 @@ def processEntry(entry):
   return processed
 
 def isValidData(processed):
-  if keysExists(processed, "pmid") and keysExists(processed, "sentence"):
+  if keysExists(processed, "sentence"):
     return True
   return False
 
 def processEntries(rawData):
-  processedEntries = []  
+  processedEntries = []
+  entry_id = 1
   for entry in rawData:
-      processed = processEntry(entry)
+      processed = processEntry(entry, entry_id)
       if isValidData(processed):
         processedEntries.append(processed)
+        entry_id = entry_id + 1
   return processedEntries
 
 def getRow(entry, csvColumns):
@@ -193,7 +228,7 @@ def getRow(entry, csvColumns):
   return row
 
 def writeToCSV(processedEntries):
-  csvColumns = ['pmid', 'sentence', 'structure_1', 'structure_2', 'pubmed_url', 'annotation_id', 'orcid']
+  csvColumns = ['id', 'pmid', 'pmcid', 'doi', 'sentence', 'batch_name', 'sentence_id', 'out_of_scope', 'structure_1', 'structure_2', 'url', 'annotation_id', 'orcid']
   with open(exportFile, 'w', newline='') as csvfile:
     writer = csv.writer(csvfile)
     writer.writerow(csvColumns)
