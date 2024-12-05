@@ -3,7 +3,8 @@ import csv
 import urllib.parse
 from config import Config
 
-download_url = "https://mapcore-demo.org/devel/flatmap/v4/annotator/download/"
+download_url = Config.FLATMAP_URL + 'annotator/download/'
+flatmap_server_url = Config.FLATMAP_URL
 #Either a list of id or None
 annotationId = None
 process_number = 20
@@ -11,23 +12,87 @@ headers = {"Authorization": f"Bearer {Config.ANNOTATION_SECRET}"}
 r = requests.get(download_url, headers=headers)
 rawData = r.json()
 taxonMapping = {}
-batch_name = "test_1"
-exportFile = "test.csv"
+flatmapServerData = None
+sckanMapping = {}
+batch_name = 'prd_2'
+exportFile = '12-3-24-prod.csv'
 
-def getTaxon(entry):
-  resource = get_keys_value(entry, "resource")
-  if not resource in taxonMapping:
+def get_keys_value(element, *keys):
+    _element = element
+    for key in keys:
+        try:
+            _element = _element[key]
+        except KeyError:
+            return None
+    return _element
+
+def get_keys_value_from_list(list, uuid, *keys):
+    for item in list:
+      if 'uuid' in item and item['uuid'] == uuid:
+        return get_keys_value(item, *keys)
+    return None
+
+
+def getDescribes(uuid):
+  global flatmapServerData
+  if flatmapServerData:
+    return get_keys_value_from_list(flatmapServerData, uuid, 'describes')
+
+def getTaxon(uuid):
+  global flatmapServerData
+  if flatmapServerData:
+    return get_keys_value_from_list(flatmapServerData, uuid, 'taxon')
+
+def getName(uuid):
+  global flatmapServerData
+  if flatmapServerData:
+    return get_keys_value_from_list(flatmapServerData, uuid, 'name')
+
+def getSckan(uuid):
+  global flatmapServerData
+  if flatmapServerData:
+    return get_keys_value_from_list(flatmapServerData, uuid, 'sckan', 'npo', 'path')
+
+def getResourceInformation(entry):
+  resource = get_keys_value(entry, 'resource')
+  map_type = None
+  describes = None
+  name = None
+  taxon = None
+  sckan= None
+  if resource:
+    uuid = None
     try:
-      r = requests.get(urllib.parse.unquote(resource))
-      data = r.json()
-      if "taxon" in data:
-        taxonMapping[resource] = data["taxon"]
-        return taxonMapping[resource]
+      uuid = resource[resource.rindex('/')+1:]
     except:
-      return None
-  if resource in taxonMapping:
-    return taxonMapping[resource]
-  return None
+      #Handle old case where only the map id is provided
+      uuid = resource
+      resource = flatmap_server_url + '/' + uuid
+
+    if flatmap_server_url in resource:
+      map_type = 'Flatmap'
+      global flatmapServerData
+      if not flatmapServerData:
+        try:
+          r = requests.get(urllib.parse.unquote(flatmap_server_url))
+          flatmapServerData = r.json()
+        except:
+          return None
+      describes = getDescribes(uuid)
+      taxon = getTaxon(uuid)
+      name = getName(uuid)
+      sckan = getSckan(uuid)
+    else:
+      map_type = 'Scaffold'
+
+  return {
+    'map_type': map_type,
+    'describes': describes,
+    'taxon': taxon,
+    'name': name,
+    'sckan': sckan,
+  }
+
 
 def findAnnotationIdForFeatureId(featureId):
   ids = []
@@ -56,15 +121,6 @@ def keysExists(element, *keys):
             return False
     return True
 
-def get_keys_value(element, *keys):
-    _element = element
-    for key in keys:
-        try:
-            _element = _element[key]
-        except KeyError:
-            return None
-    return _element
-
 def getCurationURLs(entry):
   return get_keys_value(entry, "body", "evidence")
 
@@ -73,7 +129,7 @@ def getCurationIDs(entry):
   if curationIds:
     ids = ';'.join(curationIds)
     ids = ids.replace('https://doi.org/', 'DOI:')
-    ids = ids.replace('https://pubmed.ncbi.nlm.nih.gov/', '')
+    ids = ids.replace('https://pubmed.ncbi.nlm.nih.gov/', 'PMIDS')
     return ids
   return None
 
@@ -93,10 +149,11 @@ def getPMIDs(entry):
   pmid = parseIDs(entry, 'https://pubmed.ncbi.nlm.nih.gov/')
   if pmid and pmid.isdigit():
     return pmid
-  return None  
+  return None
 
+def getStatus(entry):
+  return get_keys_value(entry, 'status')
 
-  
 def getOrcidId(entry):
   return get_keys_value(entry, "creator", "orcid")
 
@@ -129,11 +186,13 @@ def processNewConnections(entry, processed):
     if sourceModels:
       processed['structure_1'] = sourceModels
       targetModels = getModelsForNewFeature(entry, 'target')
-      sentence = "This new connection starts from: " + sourceModels
+      sentence = "The origin of this new connection is: " + sourceModels
       addToSentence(processed, sentence)
+      #### Add Via
+
       if targetModels:
         processed['structure_2'] = targetModels
-        sentence = "This new connection end at: " + targetModels
+        sentence = "This destination of this new connection is: " + targetModels
         addToSentence(processed, sentence)
 
 def addToSentence(processed, sentence):
@@ -151,8 +210,6 @@ def processNewStructure(entry, processed):
 
 def processEntry(entry, entry_id):
   processed = {}
-
-  processed['id'] = entry_id
 
   pmids = getPMIDs(entry)
   if pmids:
@@ -177,10 +234,14 @@ def processEntry(entry, entry_id):
     processed['orcid'] = orcid
     addToSentence(processed, "This is annotated using orcid id:" + orcid)
 
+  status = getStatus(entry)
+  if status:
+    processed['status'] = status
+
   annotationId = getAnnotationId(entry)
   if annotationId:
     url = download_url + str(annotationId)
-    processed['annotation_id'] = url
+    processed['id'] = url
     addToSentence(processed, "This annotation can be viewed in " + url)
 
   urls = getCurationURLs(entry)
@@ -195,10 +256,25 @@ def processEntry(entry, entry_id):
     processNewStructure(entry, processed)
     addToSentence(processed, "This is an user drawn feature.")
 
-  taxon = getTaxon(entry)
-  if taxon:
-    processed['taxon'] = taxon
-    addToSentence(processed, "This annotation was created on " + taxon)
+  map_resource = getResourceInformation(entry)
+  if map_resource:
+    if map_resource["map_type"]:
+      processed['map_type'] = map_resource['map_type']
+      addToSentence(processed, "This annotation was created on a " + processed['map_type'] + ".")
+    if map_resource['taxon']:
+      processed['taxon'] = map_resource['taxon']
+      addToSentence(processed, "This annotation was created on " +  processed['taxon'] + ".")
+    if map_resource["describes"]:
+      processed['describes'] = map_resource['describes']
+    if map_resource["name"]:
+      processed['map_name'] = map_resource['name']
+    if map_resource["sckan"]:
+      processed['sckan'] = map_resource['sckan']
+      addToSentence(processed, "This map contains sckan knowledge from " +  processed['sckan'] + ".")
+  #taxon = getTaxon(entry)
+  #if taxon:
+  #  processed['taxon'] = taxon
+  #  addToSentence(processed, "This annotation was created on " + taxon)
 
   return processed
 
@@ -228,7 +304,7 @@ def getRow(entry, csvColumns):
   return row
 
 def writeToCSV(processedEntries):
-  csvColumns = ['id', 'pmid', 'pmcid', 'doi', 'sentence', 'batch_name', 'sentence_id', 'out_of_scope', 'structure_1', 'structure_2', 'url', 'annotation_id', 'orcid']
+  csvColumns = ['id', 'status',  'pmid', 'pmcid', 'doi', 'sentence', 'batch_name', 'sentence_id', 'out_of_scope', 'structure_1', 'structure_2', 'url', 'orcid', 'map_type', 'taxon', 'sckan']
   with open(exportFile, 'w', newline='') as csvfile:
     writer = csv.writer(csvfile)
     writer.writerow(csvColumns)
