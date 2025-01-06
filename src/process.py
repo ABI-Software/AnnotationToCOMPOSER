@@ -14,8 +14,8 @@ rawData = r.json()
 taxonMapping = {}
 flatmapServerData = None
 sckanMapping = {}
-batch_name = 'prd_2'
-exportFile = '12-3-24-prod.csv'
+batch_name = 'dev'
+exportFile = '6-1-25-dev.csv'
 
 def get_keys_value(element, *keys):
     _element = element
@@ -122,15 +122,24 @@ def keysExists(element, *keys):
     return True
 
 def getCurationURLs(entry):
-  return get_keys_value(entry, "body", "evidence")
+  processedIds = []
+  curationIds = get_keys_value(entry, "body", "evidence")
+  if curationIds:
+    for newId in curationIds:
+      if isinstance(newId, str):
+        processedIds.append(newId)
+      elif isinstance(newId, dict):
+        key = next(iter(newId))
+        if key:
+          processedIds.append(newId[key])
+  return processedIds
 
 def getCurationIDs(entry):
   curationIds = getCurationURLs(entry)
-  if curationIds:
-    ids = ';'.join(curationIds)
-    ids = ids.replace('https://doi.org/', 'DOI:')
-    ids = ids.replace('https://pubmed.ncbi.nlm.nih.gov/', 'PMIDS')
-    return ids
+  ids = ';'.join(curationIds)
+  ids = ids.replace('https://doi.org/', 'DOI:')
+  ids = ids.replace('https://pubmed.ncbi.nlm.nih.gov/', 'PMIDS')
+  return ids
   return None
 
 def parseIDs(entry, matchString):
